@@ -3,7 +3,7 @@ import math
 
 from distances import dist_m, dist_p, get_new_magnitude
 
-theta = np.array([0, np.pi, np.pi/2, np.pi/4, 3/8 * np.pi, 7/16 * np.pi])
+theta = np.array([0, np.pi/2, np.pi/4, np.pi, 5/8*np.pi])
 
 n = len(theta)
 
@@ -24,55 +24,82 @@ lambda_p = np.full((n), '#', dtype=object)
 lambda_m = np.full((n), '#', dtype=object)
 
 
-#seeds s and phi
-for j in range(n):
-    for i in range(j + 1):
-        candidates = [k for k in range(j+1)]
-        s_p[i][j] = min(candidates, key=lambda k: dist_p(theta[i], theta[k]))
-        phi_p[i][j] = theta[s_p[i][j]]
-
-        s_m[i][j] = min(candidates, key=lambda k: dist_m(theta[i], theta[k]))
-        phi_m[i][j] = theta[s_m[i][j]]
-
+TWO_PI_3 = 2 / 3 * np.pi
 
 for j in range(n):
     for i in range(j + 1):
-        if dist_m(theta[i], phi_m[i][j]) > 2/3 * np.pi:
-            delta_m[i][j] = 1
+        K = range(j + 1)
+
+        # nearest neighbors
+        s_p[i, j] = min(K, key=lambda k: dist_p(theta[i], theta[k]))
+        s_m[i, j] = min(K, key=lambda k: dist_m(theta[i], theta[k]))
+        phi_p[i, j] = theta[s_p[i, j]]
+        phi_m[i, j] = theta[s_m[i, j]]
+
+        # δ
+        d_p = dist_p(theta[i], phi_p[i, j])
+        d_m = dist_m(theta[i], phi_m[i, j])
+        delta_p[i, j] = 1 if d_p >= TWO_PI_3 else 1 / (2 * math.cos(d_p / 2))
+        delta_m[i, j] = 1 if d_m >= TWO_PI_3 else 1 / (2 * math.cos(d_m / 2))
+
+        if i == j:
+            # λ, u birth (minus then plus)
+            if d_m >= TWO_PI_3:
+                lambda_m[i] = 0
+            else:
+                p = s_m[i, i]
+                lambda_m[i] = lambda_p[p] + 1
+                u_m[i, i, lambda_m[i] - 1] = delta_m[i, i]
+                for alpha in range(lambda_m[i] - 1):
+                    u_m[i, i, alpha] = u_p[p, i, alpha] = get_new_magnitude(
+                        theta[p],
+                        (theta[p] + phi_p[p, i - 1]) / 2,
+                        (theta[p] + phi_p[p, i]) / 2,
+                        u_p[p, i - 1, alpha],
+                    )
+
+            if d_p >= TWO_PI_3:
+                lambda_p[i] = 0
+            else:
+                p = s_p[i, i]
+                lambda_p[i] = lambda_m[p] + 1
+                u_p[i, i, lambda_p[i] - 1] = delta_p[i, i]
+                for alpha in range(lambda_p[i] - 1):
+                    u_p[i, i, alpha] = u_m[p, i, alpha] = get_new_magnitude(
+                        theta[p],
+                        (theta[p] + phi_m[p, i - 1]) / 2,
+                        (theta[p] + phi_m[p, i]) / 2,
+                        u_m[p, i - 1, alpha],
+                    )
         else:
-            delta_m[i][j] = 1 / (2 * math.cos(dist_m(theta[i], phi_m[i][j]) / 2))
-        
-        if dist_p(theta[i], phi_p[i][j]) > 2/3 * np.pi:
-            delta_p[i][j] = 1
-        else:
-            delta_p[i][j] = 1 / (2 * math.cos(dist_p(theta[i], phi_p[i][j]) / 2))
+            # recurrence in j
+            for alpha in range(lambda_m[i]):
+                if phi_m[i, j] != phi_m[i, j - 1]:
+                    u_m[i, j, alpha] = get_new_magnitude(
+                        theta[i],
+                        (theta[i] + phi_m[i, j - 1]) / 2,
+                        (theta[i] + phi_m[i, j]) / 2,
+                        u_m[i, j - 1, alpha],
+                    )
+                else:
+                    u_m[i, j, alpha] = u_m[i, j - 1, alpha]
 
+            for alpha in range(lambda_p[i]):
+                if phi_p[i, j] != phi_p[i, j - 1]:
+                    u_p[i, j, alpha] = get_new_magnitude(
+                        theta[i],
+                        (theta[i] + phi_p[i, j - 1]) / 2,
+                        (theta[i] + phi_p[i, j]) / 2,
+                        u_p[i, j - 1, alpha],
+                    )
+                else:
+                    u_p[i, j, alpha] = u_p[i, j - 1, alpha]
 
-for i in range(n):
-    if dist_m(theta[i], phi_m[i][i]) >= 2/3 * np.pi:
-        lambda_m[i] = 0
-    if dist_m(theta[i], phi_m[i][i]) < 2/3 * np.pi:
-        lambda_m[i] = int(lambda_p[s_m[i][i]]) + 1
-        u_m[i][i][lambda_m[i] - 1] = delta_m[i][i]
-
-    if dist_p(theta[i], phi_p[i][i]) >= 2/3 * np.pi:
-        lambda_p[i] = 0
-    if dist_p(theta[i], phi_p[i][i]) < 2/3 * np.pi:
-        lambda_p[i] = int(lambda_m[s_p[i][i]]) + 1
-        u_p[i][i][lambda_p[i] - 1] = delta_p[i][i]
-
+print(s_p)
+print(s_m)
+print(phi_p)
+print(phi_m)
 print(lambda_m)
+print(lambda_p)
 print(u_m)
-
-for j in range(n):
-    for i in range(j + 1):
-        for alpha in range(lambda_m[i]):
-            if (phi_m[i][j] != phi_m[i][j-1] and phi_m[i][j-1] != '#'):
-                old_angle = (theta[i] + phi_m[i][j-1])/2
-                old_magnitude = u_m[i][j-1][alpha]
-
-                new_angle = (theta[i] + phi_m[i][j])/2
-                new_magnitude = get_new_magnitude(theta[i], old_angle, new_angle, old_magnitude)
-                u_m[i][j][alpha] = new_magnitude
-            else: 
-                u_m[i][j][alpha] = u_m[i][j-1][alpha]
+print(u_p)
