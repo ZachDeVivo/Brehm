@@ -32,38 +32,34 @@ def _is_numeric(value) -> bool:
     return isinstance(value, (int, float, np.integer, np.floating))
 
 
-def _merge_phi_delta(
-    phi_p: np.ndarray,
-    delta_p: np.ndarray,
-    phi_m: np.ndarray,
-    delta_m: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Pick one phi/delta per cell, preferring the smaller delta below 1."""
-    phi = np.full(phi_p.shape, "#", dtype=object)
-    delta = np.full(delta_p.shape, "#", dtype=object)
-
-    for i in range(phi_p.shape[0]):
-        for j in range(phi_p.shape[1]):
-            candidates: list[tuple[float, float]] = []
-            for p, d in (
-                (phi_p[i, j], delta_p[i, j]),
-                (phi_m[i, j], delta_m[i, j]),
-            ):
-                if _is_numeric(p) and _is_numeric(d) and d < 1:
-                    candidates.append((float(p), float(d)))
-            if candidates:
-                p, d = min(candidates, key=lambda item: item[1])
-                phi[i, j] = p
-                delta[i, j] = d
-
-    return phi, delta
+def _active_delta_rays(
+    thetas: np.ndarray,
+    phi_sides: list[np.ndarray],
+    delta_sides: list[np.ndarray],
+    visible_count: int,
+) -> list[tuple[float, float]]:
+    """
+    Collect (mid-angle, inner-radius) for every ± side with delta < 1.
+    Both plus and minus partners are kept when both are active.
+    """
+    j = visible_count - 1
+    rays: list[tuple[float, float]] = []
+    for phi, delta in zip(phi_sides, delta_sides):
+        for i in range(visible_count):
+            d = delta[i, j]
+            p = phi[i, j]
+            if not _is_numeric(d) or not _is_numeric(p) or d >= 1:
+                continue
+            angle = (thetas[i] + float(p)) / 2
+            rays.append((float(angle), float(d)))
+    return rays
 
 
 def _draw_perpendicular_bisectors(
     ax: plt.Axes,
     thetas: np.ndarray,
-    phi: np.ndarray,
-    delta: np.ndarray,
+    phi_sides: list[np.ndarray],
+    delta_sides: list[np.ndarray],
     visible_count: int,
 ) -> list:
     """
@@ -73,16 +69,7 @@ def _draw_perpendicular_bisectors(
     hits an active delta line.
     """
     artists: list = []
-    j = visible_count - 1
-
-    # Collect active delta-line angles and inner radii
-    active_delta: list[tuple[float, float]] = []
-    for k in range(visible_count):
-        d = delta[k, j]
-        p = phi[k, j]
-        if _is_numeric(d) and _is_numeric(p) and d < 1:
-            angle = (thetas[k] + float(p)) / 2
-            active_delta.append((float(angle), float(d)))
+    active_delta = _active_delta_rays(thetas, phi_sides, delta_sides, visible_count)
 
     for i in range(visible_count):
         theta_i = float(thetas[i])
@@ -138,25 +125,17 @@ def _draw_perpendicular_bisectors(
 def _draw_delta_lines(
     ax: plt.Axes,
     thetas: np.ndarray,
-    phi: np.ndarray,
-    delta: np.ndarray,
+    phi_sides: list[np.ndarray],
+    delta_sides: list[np.ndarray],
     visible_count: int,
 ) -> list:
     """
-    With a_0 .. a_j visible (j = visible_count - 1), draw one segment per
-    point a_i at angle (theta[i] + phi[i][j]) / 2 from radius delta[i][j] to 1
-    whenever delta[i][j] < 1.  Advancing the step updates j and moves each line.
+    With a_0 .. a_j visible, draw every active ± delta ray: for each side,
+    a segment at angle (theta[i] + phi[i][j]) / 2 from radius delta[i][j] to 1
+    whenever delta[i][j] < 1.
     """
     artists: list = []
-    j = visible_count - 1
-
-    for i in range(visible_count):
-        d = delta[i, j]
-        p = phi[i, j]
-        if not _is_numeric(d) or not _is_numeric(p) or d >= 1:
-            continue
-
-        angle = (thetas[i] + float(p)) / 2
+    for angle, d in _active_delta_rays(thetas, phi_sides, delta_sides, visible_count):
         x_inner = d * np.cos(angle)
         y_inner = d * np.sin(angle)
         x_outer = np.cos(angle)
@@ -243,24 +222,33 @@ def draw_unit_circle(
 def draw_unit_circle_interactive(
     thetas: np.ndarray | list[float],
     *,
-    phi: np.ndarray | None = None,
-    delta: np.ndarray | None = None,
+    phi_p: np.ndarray | None = None,
+    delta_p: np.ndarray | None = None,
+    phi_m: np.ndarray | None = None,
+    delta_m: np.ndarray | None = None,
     show: bool = True,
 ) -> tuple[plt.Figure, plt.Axes]:
     """
     Draw the unit circle and reveal points one at a time with Next / Back buttons.
 
     Initially only a_0 is shown.  Each Next reveals a_j; every visible a_i
-    gets one segment at column j using phi[i][j] and delta[i][j].
+    gets a delta ray for each ± side with delta[i][j] < 1.
     """
     thetas = np.asarray(thetas, dtype=float)
     n = thetas.size
     if n < 1:
         raise ValueError("thetas must contain at least one angle")
 
-    draw_deltas = phi is not None and delta is not None
-    if draw_deltas and (phi.shape != (n, n) or delta.shape != (n, n)):
-        raise ValueError("phi and delta matrices must have shape (n, n)")
+    sides = [
+        (phi_p, delta_p),
+        (phi_m, delta_m),
+    ]
+    phi_sides = [phi for phi, delta in sides if phi is not None and delta is not None]
+    delta_sides = [delta for phi, delta in sides if phi is not None and delta is not None]
+    draw_deltas = len(phi_sides) > 0
+    for phi, delta in zip(phi_sides, delta_sides):
+        if phi.shape != (n, n) or delta.shape != (n, n):
+            raise ValueError("phi and delta matrices must have shape (n, n)")
 
     fig, ax = plt.subplots(figsize=(8, 8))
     plt.subplots_adjust(bottom=0.12)
@@ -278,10 +266,12 @@ def draw_unit_circle_interactive(
         overlay_artists = []
         if draw_deltas:
             overlay_artists.extend(
-                _draw_delta_lines(ax, thetas, phi, delta, visible_count)
+                _draw_delta_lines(ax, thetas, phi_sides, delta_sides, visible_count)
             )
             overlay_artists.extend(
-                _draw_perpendicular_bisectors(ax, thetas, phi, delta, visible_count)
+                _draw_perpendicular_bisectors(
+                    ax, thetas, phi_sides, delta_sides, visible_count
+                )
             )
         overlay_artists.extend(_draw_points(ax, thetas[:visible_count]))
         _setup_axes(ax, n, visible_count)
